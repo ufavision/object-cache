@@ -231,10 +231,15 @@ if [ "${#DIRS[@]}" -eq 0 ]; then
     exit 0
 fi
 
+# นับจำนวนเว็บทั้งหมดสำหรับแสดง progress
+TOTAL_SITES=${#DIRS[@]}
+COUNTER_FILE="$RESULT_DIR/counter"
+echo 0 > "$COUNTER_FILE"
+
 # ====================================
 # process_site: Check + Fix ในรอบเดียว
 # ====================================
-log " กำลังตรวจสอบและแก้ไข (single-pass)..."
+log " จำนวน WordPress : $TOTAL_SITES เว็บ"
 log "======================================"
 
 # แปลงค่าจาก wp-cli ให้ clean: ตัด whitespace + single-quotes ที่ติดมา
@@ -246,6 +251,8 @@ process_site() {
     local LOCK_FILE="$3"
     local RESULT_DIR="$4"
     local WP_TIMEOUT="$5"
+    local TOTAL_SITES="$6"
+    local COUNTER_FILE="$7"
 
     local base=$(echo "$dir" | cut -d'/' -f2)
     local user=$(echo "$dir" | cut -d'/' -f3)
@@ -271,6 +278,17 @@ process_site() {
         timeout "$WP_TIMEOUT" wp --path="$dir" "$@" --allow-root >/dev/null 2>&1
     }
     _wp() { _wp_get "$@"; }
+
+    # atomic counter increment + read
+    _next_count() {
+        local n
+        ( flock 201
+          n=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
+          n=$(( n + 1 ))
+          echo "$n" > "$COUNTER_FILE"
+          echo "$n"
+        ) 201>"${COUNTER_FILE}.lock"
+    }
 
     # --- เช็ค plugin ---
     if ! _wp plugin is-installed litespeed-cache; then
@@ -334,7 +352,8 @@ process_site() {
 
     # --- ถ้าครบทุก field ถูกต้องหมด: skip เงียบๆ ---
     if [ "${#NEED_FIX[@]}" -eq 0 ]; then
-        _log "✔️  $SITE"
+        local IDX; IDX=$(_next_count)
+        _log "✔️  Object Cache Already Set : [${IDX}/${TOTAL_SITES}] $SITE"
         touch "${RESULT_DIR}/check/correct_${UNIQUE}"
         return
     fi
@@ -374,7 +393,8 @@ process_site() {
         esac
     done
     CHANGES="${CHANGES%  |}"
-    _log "🔧 $SITE  ${CHANGES}" 
+    local IDX; IDX=$(_next_count)
+    _log "🔧 Object Cache Fixed : [${IDX}/${TOTAL_SITES}] $SITE  ${CHANGES}"
 
     # --- แก้ไขเฉพาะ field ที่ผิด ---
     local FAILED=0
@@ -390,7 +410,8 @@ process_site() {
     done
 
     if [ "$FAILED" -eq 1 ]; then
-        _log "❌ FAILED : $SITE"
+        local IDX; IDX=$(_next_count)
+        _log "❌ FAILED : [${IDX}/${TOTAL_SITES}] $SITE"
         touch "${RESULT_DIR}/check/failed_${UNIQUE}"
     else
         touch "${RESULT_DIR}/check/fixed_${UNIQUE}"
@@ -402,7 +423,7 @@ export -f _clean
 
 declare -a PIDS=()
 for dir in "${DIRS[@]}"; do
-    process_site "$dir" "$LOG_FILE" "$LOCK_FILE" "$RESULT_DIR" "$WP_TIMEOUT" &
+    process_site "$dir" "$LOG_FILE" "$LOCK_FILE" "$RESULT_DIR" "$WP_TIMEOUT" "$TOTAL_SITES" "$COUNTER_FILE" &
     PIDS+=($!)
     if [ "${#PIDS[@]}" -ge "$MAX_JOBS" ]; then
         wait "${PIDS[0]}"
@@ -427,10 +448,9 @@ log " 👥 cPanel Accounts    : $TOTAL_ACCOUNTS accounts"
 log "    /home  : $COUNT_HOME1 | /home2 : $COUNT_HOME2 | ทั้งคู่ : $COUNT_BOTH"
 log "--------------------------------------"
 log " รวม WordPress          : $(( CORRECT + FIXED + FAILED + SKIPPED )) เว็บ (นับจากผลจริง)"
-log " ✅ ถูกต้องอยู่แล้ว    : $CORRECT เว็บ"
-log " ✅ แก้ไขสำเร็จ         : $FIXED เว็บ"
-log " ❌ แก้ไขไม่สำเร็จ      : $FAILED เว็บ"
-log " ⏭  ข้ามทั้งหมด         : $SKIPPED เว็บ"
-log " เวลาที่ใช้             : $(( ELAPSED / 60 )) นาที $(( ELAPSED % 60 )) วินาที"
-log " ✅ รัน verify ต่อด้วย  : verify-object-cache.sh"
+log " ✔️  Object Cache Already Set : $CORRECT เว็บ (ตั้งค่าไว้ถูกต้องอยู่แล้วไม่ได้ปรับเปลี่ยน)"
+log " 🔧 Object Cache Fixed        : $FIXED เว็บ (อัปเดตเรียบร้อย)"
+log " ❌ แก้ไขไม่สำเร็จ            : $FAILED เว็บ"
+log " ⏭  ข้ามทั้งหมด               : $SKIPPED เว็บ"
+log " เวลาที่ใช้                   : $(( ELAPSED / 60 )) นาที $(( ELAPSED % 60 )) วินาที"
 log "======================================"
