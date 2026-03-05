@@ -85,8 +85,6 @@ get_cpanel_accounts() {
 # PRE-SCAN: สแกน cPanel Accounts
 # ====================================
 log "======================================"
-log " PRE-SCAN: กำลังสแกน cPanel Accounts..."
-log "======================================"
 
 CPANEL_USERS_HOME1=()
 CPANEL_USERS_HOME2=()
@@ -129,14 +127,7 @@ COUNT_HOME1=${#CPANEL_USERS_HOME1[@]}
 COUNT_HOME2=${#CPANEL_USERS_HOME2[@]}
 COUNT_BOTH=${#CPANEL_USERS_BOTH[@]}
 
-log "--------------------------------------"
-log " ผลสแกน cPanel Accounts"
-log "--------------------------------------"
-log " 👥 รวม cPanel Accounts ทั้งหมด : $TOTAL_ACCOUNTS accounts"
-log " 📁 อยู่ใน /home เท่านั้น        : $COUNT_HOME1 accounts"
-log " 📁 อยู่ใน /home2 เท่านั้น       : $COUNT_HOME2 accounts"
-log " 📁 อยู่ทั้ง /home และ /home2    : $COUNT_BOTH accounts"
-log "--------------------------------------"
+log " 👥 cPanel Accounts ทั้งหมด : $TOTAL_ACCOUNTS accounts"
 log "======================================"
 
 # ====================================
