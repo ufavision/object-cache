@@ -259,29 +259,32 @@ process_site() {
         ( flock 200; echo "[$DATE] $1" >> "$LOG_FILE" ) 200>"$LOCK_FILE"
     }
 
-    _wp() {
+    # get: ต้องการ stdout | set: suppress ทั้ง stdout และ stderr
+    _wp_get() {
         timeout "$WP_TIMEOUT" wp --path="$dir" "$@" --allow-root 2>/dev/null
     }
+    _wp_set() {
+        timeout "$WP_TIMEOUT" wp --path="$dir" "$@" --allow-root >/dev/null 2>&1
+    }
+    _wp() { _wp_get "$@"; }
 
     # --- เช็ค plugin ---
     if ! _wp plugin is-installed litespeed-cache; then
-        _log "⏭  NO LITESPEED: $SITE"
         touch "${RESULT_DIR}/check/noplugin_${UNIQUE}"
         return
     fi
     if ! _wp plugin is-active litespeed-cache; then
-        _log "⏭  INACTIVE: $SITE"
         touch "${RESULT_DIR}/check/inactive_${UNIQUE}"
         return
     fi
 
     # --- อ่านค่าปัจจุบัน (clean quotes + whitespace ออก) ---
-    local CUR_OBJ;  CUR_OBJ=$(_clean "$(_wp litespeed-option get object)")
-    local CUR_KIND; CUR_KIND=$(_clean "$(_wp litespeed-option get object-kind)")
-    local CUR_HOST; CUR_HOST=$(_wp litespeed-option get object-host | tr -d '[:space:]')
-    local CUR_PORT; CUR_PORT=$(_clean "$(_wp litespeed-option get object-port)")
-    local CUR_USER; CUR_USER=$(_clean "$(_wp litespeed-option get object-user)")
-    local CUR_PSWD; CUR_PSWD=$(_clean "$(_wp litespeed-option get object-pswd)")
+    local CUR_OBJ;  CUR_OBJ=$(_clean "$(_wp_get litespeed-option get object)")
+    local CUR_KIND; CUR_KIND=$(_clean "$(_wp_get litespeed-option get object-kind)")
+    local CUR_HOST; CUR_HOST=$(_wp_get litespeed-option get object-host | tr -d '[:space:]')
+    local CUR_PORT; CUR_PORT=$(_clean "$(_wp_get litespeed-option get object-port)")
+    local CUR_USER; CUR_USER=$(_clean "$(_wp_get litespeed-option get object-user)")
+    local CUR_PSWD; CUR_PSWD=$(_clean "$(_wp_get litespeed-option get object-pswd)")
 
     # --- เช็คทีละ field เฉพาะที่ผิดจริง ---
     local NEED_FIX=()
@@ -304,7 +307,7 @@ process_site() {
 
     # --- ถ้าครบทุก field ถูกต้องหมด: skip เงียบๆ ---
     if [ "${#NEED_FIX[@]}" -eq 0 ]; then
-        _log "✅ SKIP (ตั้งค่าครบแล้ว): $SITE"
+        _log "✅ SKIP : $SITE"
         touch "${RESULT_DIR}/check/correct_${UNIQUE}"
         return
     fi
@@ -319,6 +322,7 @@ process_site() {
     }
 
     # --- แสดงเฉพาะ field ที่เปลี่ยน (จากอะไร → เป็นอะไร) ---
+    _log "======================================"
     _log "🔧 FIX (${#NEED_FIX[@]} รายการ): $SITE"
     for field in "${NEED_FIX[@]}"; do
         case "$field" in
@@ -348,20 +352,24 @@ process_site() {
     local FAILED=0
     for field in "${NEED_FIX[@]}"; do
         case "$field" in
-            object)      _wp litespeed-option set object 1 || FAILED=1 ;;
-            object-kind) _wp litespeed-option set object-kind 1 || FAILED=1 ;;
-            object-host) _wp litespeed-option set object-host "/var/run/redis/redis.sock" || FAILED=1 ;;
-            object-port) _wp litespeed-option set object-port "0" || FAILED=1 ;;
-            object-user) _wp litespeed-option set object-user "" || _wp litespeed-option set object-user " " || FAILED=1 ;;
-            object-pswd) _wp litespeed-option set object-pswd "" || _wp litespeed-option set object-pswd " " || FAILED=1 ;;
+            object)      _wp_set litespeed-option set object 1 || FAILED=1 ;;
+            object-kind) _wp_set litespeed-option set object-kind 1 || FAILED=1 ;;
+            object-host) _wp_set litespeed-option set object-host "/var/run/redis/redis.sock" || FAILED=1 ;;
+            object-port) _wp_set litespeed-option set object-port "0" || FAILED=1 ;;
+            object-user) _wp_set litespeed-option set object-user "" || _wp_set litespeed-option set object-user " " || FAILED=1 ;;
+            object-pswd) _wp_set litespeed-option set object-pswd "" || _wp_set litespeed-option set object-pswd " " || FAILED=1 ;;
         esac
     done
 
     if [ "$FAILED" -eq 1 ]; then
-        _log "   ❌ FAILED: แก้ไขไม่สำเร็จ: $SITE"
+        _log "--------------------------------------"
+        _log "   ❌ FAILED : แก้ไขไม่สำเร็จ"
+        _log "   📁 Site   : $SITE"
+        _log "======================================"
         touch "${RESULT_DIR}/check/failed_${UNIQUE}"
     else
-        _log "   ✅ FIXED: แก้ไขครบทุกรายการแล้ว"
+        _log "   ✅ FIXED  : แก้ไขครบทุกรายการแล้ว"
+        _log "======================================"
         touch "${RESULT_DIR}/check/fixed_${UNIQUE}"
     fi
 }
