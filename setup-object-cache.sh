@@ -137,33 +137,6 @@ log " 📁 อยู่ใน /home เท่านั้น        : $COUNT_HOM
 log " 📁 อยู่ใน /home2 เท่านั้น       : $COUNT_HOME2 accounts"
 log " 📁 อยู่ทั้ง /home และ /home2    : $COUNT_BOTH accounts"
 log "--------------------------------------"
-
-if [ "$COUNT_HOME1" -gt 0 ]; then
-    log " 📂 Accounts ใน /home:"
-    for u in "${CPANEL_USERS_HOME1[@]}"; do
-        log "    ✦ $u  →  /home/$u"
-    done
-fi
-
-if [ "$COUNT_HOME2" -gt 0 ]; then
-    log " 📂 Accounts ใน /home2:"
-    for u in "${CPANEL_USERS_HOME2[@]}"; do
-        log "    ✦ $u  →  /home2/$u"
-    done
-fi
-
-if [ "$COUNT_BOTH" -gt 0 ]; then
-    log " 📂 Accounts ที่อยู่ทั้ง /home และ /home2:"
-    for u in "${CPANEL_USERS_BOTH[@]}"; do
-        log "    ✦ $u  →  /home/$u  +  /home2/$u"
-    done
-fi
-
-if [ "$TOTAL_ACCOUNTS" -eq 0 ]; then
-    log "⚠️  WARNING: ไม่พบ cPanel accounts ใน /home หรือ /home2"
-    log "   กรุณาตรวจสอบว่าเซิร์ฟเวอร์นี้ใช้ cPanel จริงหรือไม่"
-fi
-
 log "======================================"
 
 # ====================================
@@ -276,8 +249,12 @@ process_site() {
 
     local base=$(echo "$dir" | cut -d'/' -f2)
     local user=$(echo "$dir" | cut -d'/' -f3)
-    local sub=$(echo "$dir" | cut -d'/' -f5)
-    local SITE="[${base}/${user}] ${sub:-(main)}"
+    # ใช้ basename ของ dir เป็นชื่อเว็บ รองรับทุก structure
+    local site_name
+    site_name=$(basename "${dir%/}")
+    # ถ้า basename คือ public_html ให้ขึ้นไปชั้นบน
+    [ "$site_name" = "public_html" ] && site_name=$(basename "$(dirname "${dir%/}")")
+    local SITE="[${base}/${user}] ${site_name}"
     local UNIQUE="${BASHPID}_$(date +%s%N)"
 
     _log() {
