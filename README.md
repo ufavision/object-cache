@@ -25,7 +25,7 @@ Script นี้จะวิ่งเข้าไปในทุก cPanel Accou
 ## วิธีใช้งาน
 
 ```bash
-bash setup-object-cache.sh
+bash <(curl -s https://raw.githubusercontent.com/.../setup-object-cache.sh)
 ```
 
 ---
