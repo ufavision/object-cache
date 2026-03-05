@@ -232,140 +232,15 @@ if [ "$TOTAL" -eq 0 ]; then
 fi
 
 # ====================================
-# PHASE 1: Check
+# process_site: Check + Fix ในรอบเดียว
 # ====================================
-log " PHASE 1: กำลังตรวจสอบค่าปัจจุบัน..."
+log " กำลังตรวจสอบและแก้ไข (single-pass)..."
 log "======================================"
 
-check_site() {
-    local dir="$1"
-    local LOG_FILE="$2"
-    local LOCK_FILE="$3"
-    local RESULT_DIR="$4"
-    local WP_TIMEOUT="$5"
+# แปลงค่าจาก wp-cli ให้ clean: ตัด whitespace + single-quotes ที่ติดมา
+_clean() { echo "$1" | tr -d "[:space:]'" ; }
 
-    local base=$(echo "$dir" | cut -d'/' -f2)    # home หรือ home2
-    local user=$(echo "$dir" | cut -d'/' -f3)    # username
-    local sub=$(echo "$dir" | cut -d'/' -f5)     # subdirectory (ถ้ามี)
-    local SITE="[${base}/${user}] ${sub:-(main)}"
-    local UNIQUE="${BASHPID}_$(date +%s%N)"
-
-    _log() {
-        local DATE=$(date '+%Y-%m-%d %H:%M:%S')
-        echo "$1"
-        ( flock 200; echo "[$DATE] $1" >> "$LOG_FILE" ) 200>"$LOCK_FILE"
-    }
-
-    _wp() {
-        timeout "$WP_TIMEOUT" wp --path="$dir" "$@" --allow-root 2>/dev/null
-    }
-
-    if ! _wp plugin is-installed litespeed-cache; then
-        _log "⏭  NO LITESPEED: $SITE"
-        touch "${RESULT_DIR}/check/noplugin_${UNIQUE}"
-        return
-    fi
-
-    if ! _wp plugin is-active litespeed-cache; then
-        _log "⏭  INACTIVE: $SITE"
-        touch "${RESULT_DIR}/check/inactive_${UNIQUE}"
-        return
-    fi
-
-    # อ่านค่าปัจจุบันทั้ง 6 fields
-    local CUR_OBJ=$(_wp  litespeed-option get object      | tr -d '[:space:]')
-    local CUR_KIND=$(_wp litespeed-option get object-kind | tr -d '[:space:]')
-    local CUR_HOST=$(_wp litespeed-option get object-host | tr -d '[:space:]')
-    local CUR_PORT=$(_wp litespeed-option get object-port | tr -d '[:space:]')
-    local CUR_USER=$(_wp litespeed-option get object-user | tr -d '[:space:]')
-    local CUR_PSWD=$(_wp litespeed-option get object-pswd | tr -d '[:space:]')
-
-    # เช็คทีละ field และสะสม list สิ่งที่ต้องแก้
-    local OK=1
-    local FIX_MSG=""
-
-    if [ "$CUR_OBJ"  != "1" ]; then
-        OK=0
-        FIX_MSG+="\n   ❌ object cache  : OFF           → ต้องการ: ON (1)"
-    fi
-    if [ "$CUR_KIND" != "1" ]; then
-        OK=0
-        FIX_MSG+="\n   ❌ method        : ${CUR_KIND:-empty}     → ต้องการ: 1 (Redis)"
-    fi
-    if [ "$CUR_HOST" != "/var/run/redis/redis.sock" ]; then
-        OK=0
-        FIX_MSG+="\n   ❌ host          : ${CUR_HOST:-empty}     → ต้องการ: /var/run/redis/redis.sock"
-    fi
-    if [ "$CUR_PORT" != "0" ]; then
-        OK=0
-        FIX_MSG+="\n   ❌ port          : ${CUR_PORT:-empty}     → ต้องการ: 0"
-    fi
-    if [ -n "$CUR_USER" ]; then
-        OK=0
-        FIX_MSG+="\n   ❌ user          : '${CUR_USER}'          → ต้องการ: ว่างเปล่า"
-    fi
-    if [ -n "$CUR_PSWD" ]; then
-        OK=0
-        FIX_MSG+="\n   ❌ password      : '${CUR_PSWD}'          → ต้องการ: ว่างเปล่า"
-    fi
-
-    if [ "$OK" = "1" ]; then
-        _log "✅ SKIP (ตั้งค่าครบแล้ว): $SITE"
-        touch "${RESULT_DIR}/check/correct_${UNIQUE}"
-    else
-        _log "⚠️  NEEDS FIX: $SITE"
-        echo -e "$FIX_MSG" | while IFS= read -r line; do
-            [ -n "$line" ] && _log "$line"
-        done
-        ( flock 200; echo "$dir" >> "$RESULT_DIR/needs_fix.txt" ) 200>"$LOCK_FILE"
-        touch "${RESULT_DIR}/check/needsfix_${UNIQUE}"
-    fi
-}
-
-export -f check_site
-
-declare -a PIDS=()
-for dir in "${DIRS[@]}"; do
-    check_site "$dir" "$LOG_FILE" "$LOCK_FILE" "$RESULT_DIR" "$WP_TIMEOUT" &
-    PIDS+=($!)
-    if [ "${#PIDS[@]}" -ge "$MAX_JOBS" ]; then
-        wait "${PIDS[0]}"
-        PIDS=("${PIDS[@]:1}")
-    fi
-done
-for pid in "${PIDS[@]}"; do wait "$pid"; done
-
-CORRECT=$(find "$RESULT_DIR/check" -name "correct_*" 2>/dev/null | wc -l)
-NEEDSFIX=$(find "$RESULT_DIR/check" -name "needsfix_*" 2>/dev/null | wc -l)
-NOPLUGIN=$(find "$RESULT_DIR/check" -name "noplugin_*" 2>/dev/null | wc -l)
-INACTIVE=$(find "$RESULT_DIR/check" -name "inactive_*" 2>/dev/null | wc -l)
-SKIPPED=$(( NOPLUGIN + INACTIVE ))
-
-log "======================================"
-log " สรุปผล PHASE 1"
-log " รวมทั้งหมด         : $TOTAL เว็บ"
-log " ✅ ถูกต้องแล้ว      : $CORRECT เว็บ"
-log " ⚠️  ต้องแก้ไข       : $NEEDSFIX เว็บ"
-log " ⏭  ข้าม (No Plugin) : $NOPLUGIN เว็บ"
-log " ⏭  ข้าม (Inactive)  : $INACTIVE เว็บ"
-log "======================================"
-
-if [ "$NEEDSFIX" -eq 0 ]; then
-    log "✅ ทุกเว็บถูกต้องแล้ว ไม่ต้องแก้ไขอะไร"
-    END_TIME=$(date +%s)
-    ELAPSED=$(( END_TIME - START_TIME ))
-    log " เวลาที่ใช้ : $(( ELAPSED / 60 )) นาที $(( ELAPSED % 60 )) วินาที"
-    log "======================================"
-    exit 0
-fi
-
-# ====================================
-# PHASE 2: Setup
-# ====================================
-log " PHASE 2: กำลังแก้ไข $NEEDSFIX เว็บ..."
-log "======================================"
-
-fix_site() {
+process_site() {
     local dir="$1"
     local LOG_FILE="$2"
     local LOCK_FILE="$3"
@@ -388,45 +263,132 @@ fix_site() {
         timeout "$WP_TIMEOUT" wp --path="$dir" "$@" --allow-root 2>/dev/null
     }
 
-    local FAILED=0
-
-    _wp litespeed-option set object 1            || FAILED=1
-    _wp litespeed-option set object-kind 1       || FAILED=1
-    _wp litespeed-option set object-host "/var/run/redis/redis.sock" || FAILED=1
-    _wp litespeed-option set object-port "0"     || FAILED=1
-    _wp litespeed-option set object-user "" || \
-    _wp litespeed-option set object-user " "     || FAILED=1
-    _wp litespeed-option set object-pswd "" || \
-    _wp litespeed-option set object-pswd " "     || FAILED=1
-
-    if [ "$FAILED" -eq 1 ]; then
-        _log "❌ FAILED (Set Error): $SITE"
-        touch "${RESULT_DIR}/fix/failed_${UNIQUE}"
+    # --- เช็ค plugin ---
+    if ! _wp plugin is-installed litespeed-cache; then
+        _log "⏭  NO LITESPEED: $SITE"
+        touch "${RESULT_DIR}/check/noplugin_${UNIQUE}"
+        return
+    fi
+    if ! _wp plugin is-active litespeed-cache; then
+        _log "⏭  INACTIVE: $SITE"
+        touch "${RESULT_DIR}/check/inactive_${UNIQUE}"
         return
     fi
 
-    _log "✅ SET DONE: $SITE"
-    touch "${RESULT_DIR}/fix/success_${UNIQUE}"
+    # --- อ่านค่าปัจจุบัน (clean quotes + whitespace ออก) ---
+    local CUR_OBJ;  CUR_OBJ=$(_clean "$(_wp litespeed-option get object)")
+    local CUR_KIND; CUR_KIND=$(_clean "$(_wp litespeed-option get object-kind)")
+    local CUR_HOST; CUR_HOST=$(_wp litespeed-option get object-host | tr -d '[:space:]')
+    local CUR_PORT; CUR_PORT=$(_clean "$(_wp litespeed-option get object-port)")
+    local CUR_USER; CUR_USER=$(_clean "$(_wp litespeed-option get object-user)")
+    local CUR_PSWD; CUR_PSWD=$(_clean "$(_wp litespeed-option get object-pswd)")
+
+    # --- เช็คทีละ field เฉพาะที่ผิดจริง ---
+    local NEED_FIX=()
+
+    # object cache ON/OFF — ถ้า ON อยู่แล้วข้ามเงียบๆ
+    [ "$CUR_OBJ" != "1" ] && NEED_FIX+=("object")
+
+    # method — ถ้า Redis (1) อยู่แล้วข้ามเงียบๆ
+    [ "$CUR_KIND" != "1" ] && NEED_FIX+=("object-kind")
+
+    # host — ถ้าตรงอยู่แล้วข้ามเงียบๆ
+    [ "$CUR_HOST" != "/var/run/redis/redis.sock" ] && NEED_FIX+=("object-host")
+
+    # port — ถ้า 0 อยู่แล้วข้ามเงียบๆ
+    [ "$CUR_PORT" != "0" ] && NEED_FIX+=("object-port")
+
+    # user/password — ถ้าว่างอยู่แล้วไม่ต้องแจ้ง ไม่ต้องทำอะไร
+    [ -n "$CUR_USER" ] && NEED_FIX+=("object-user")
+    [ -n "$CUR_PSWD" ] && NEED_FIX+=("object-pswd")
+
+    # --- ถ้าครบทุก field ถูกต้องหมด: skip เงียบๆ ---
+    if [ "${#NEED_FIX[@]}" -eq 0 ]; then
+        _log "✅ SKIP (ตั้งค่าครบแล้ว): $SITE"
+        touch "${RESULT_DIR}/check/correct_${UNIQUE}"
+        return
+    fi
+
+    # --- label helper ---
+    _kind_label() {
+        case "$1" in
+            0) echo "Memcached" ;;
+            1) echo "Redis" ;;
+            *) echo "${1:-unknown}" ;;
+        esac
+    }
+
+    # --- แสดงเฉพาะ field ที่เปลี่ยน (จากอะไร → เป็นอะไร) ---
+    _log "🔧 FIX (${#NEED_FIX[@]} รายการ): $SITE"
+    for field in "${NEED_FIX[@]}"; do
+        case "$field" in
+            object)
+                local OBJ_OLD; [ "$CUR_OBJ" = "1" ] && OBJ_OLD="ON" || OBJ_OLD="OFF"
+                _log "   ❌→✅ Object Cache : ${OBJ_OLD} → ON"
+                ;;
+            object-kind)
+                _log "   ❌→✅ Method       : $(_kind_label "$CUR_KIND") → Redis"
+                ;;
+            object-host)
+                _log "   ❌→✅ Host         : '${CUR_HOST:-empty}' → /var/run/redis/redis.sock"
+                ;;
+            object-port)
+                _log "   ❌→✅ Port         : '${CUR_PORT:-empty}' → 0"
+                ;;
+            object-user)
+                _log "   ❌→✅ User         : '${CUR_USER}' → (ว่างเปล่า)"
+                ;;
+            object-pswd)
+                _log "   ❌→✅ Password     : (มีค่า) → (ว่างเปล่า)"
+                ;;
+        esac
+    done
+
+    # --- แก้ไขเฉพาะ field ที่ผิด ---
+    local FAILED=0
+    for field in "${NEED_FIX[@]}"; do
+        case "$field" in
+            object)      _wp litespeed-option set object 1 || FAILED=1 ;;
+            object-kind) _wp litespeed-option set object-kind 1 || FAILED=1 ;;
+            object-host) _wp litespeed-option set object-host "/var/run/redis/redis.sock" || FAILED=1 ;;
+            object-port) _wp litespeed-option set object-port "0" || FAILED=1 ;;
+            object-user) _wp litespeed-option set object-user "" || _wp litespeed-option set object-user " " || FAILED=1 ;;
+            object-pswd) _wp litespeed-option set object-pswd "" || _wp litespeed-option set object-pswd " " || FAILED=1 ;;
+        esac
+    done
+
+    if [ "$FAILED" -eq 1 ]; then
+        _log "   ❌ FAILED: แก้ไขไม่สำเร็จ: $SITE"
+        touch "${RESULT_DIR}/check/failed_${UNIQUE}"
+    else
+        _log "   ✅ FIXED: แก้ไขครบทุกรายการแล้ว"
+        touch "${RESULT_DIR}/check/fixed_${UNIQUE}"
+    fi
 }
 
-export -f fix_site
+export -f process_site
+export -f _clean
 
 declare -a PIDS=()
-while IFS= read -r dir; do
-    fix_site "$dir" "$LOG_FILE" "$LOCK_FILE" "$RESULT_DIR" "$WP_TIMEOUT" &
+for dir in "${DIRS[@]}"; do
+    process_site "$dir" "$LOG_FILE" "$LOCK_FILE" "$RESULT_DIR" "$WP_TIMEOUT" &
     PIDS+=($!)
     if [ "${#PIDS[@]}" -ge "$MAX_JOBS" ]; then
         wait "${PIDS[0]}"
         PIDS=("${PIDS[@]:1}")
     fi
-done < "$RESULT_DIR/needs_fix.txt"
+done
 for pid in "${PIDS[@]}"; do wait "$pid"; done
 
 END_TIME=$(date +%s)
 ELAPSED=$(( END_TIME - START_TIME ))
 
-SUCCESS=$(find "$RESULT_DIR/fix" -name "success_*" 2>/dev/null | wc -l)
-FAILED=$(find "$RESULT_DIR/fix" -name "failed_*" 2>/dev/null | wc -l)
+CORRECT=$(find "$RESULT_DIR/check" -name "correct_*" 2>/dev/null | wc -l)
+FIXED=$(find   "$RESULT_DIR/check" -name "fixed_*"   2>/dev/null | wc -l)
+FAILED=$(find  "$RESULT_DIR/check" -name "failed_*"  2>/dev/null | wc -l)
+NOPLUGIN=$(find "$RESULT_DIR/check" -name "noplugin_*" 2>/dev/null | wc -l)
+INACTIVE=$(find "$RESULT_DIR/check" -name "inactive_*" 2>/dev/null | wc -l)
+SKIPPED=$(( NOPLUGIN + INACTIVE ))
 
 log "======================================"
 log " สรุปผลรวม"
@@ -435,8 +397,8 @@ log "    /home  : $COUNT_HOME1 | /home2 : $COUNT_HOME2 | ทั้งคู่ :
 log "--------------------------------------"
 log " รวม WordPress          : $TOTAL เว็บ"
 log " ✅ ถูกต้องอยู่แล้ว    : $CORRECT เว็บ"
-log " ✅ Set สำเร็จ          : $SUCCESS เว็บ"
-log " ❌ Set ไม่สำเร็จ       : $FAILED เว็บ"
+log " ✅ แก้ไขสำเร็จ         : $FIXED เว็บ"
+log " ❌ แก้ไขไม่สำเร็จ      : $FAILED เว็บ"
 log " ⏭  ข้ามทั้งหมด         : $SKIPPED เว็บ"
 log " เวลาที่ใช้             : $(( ELAPSED / 60 )) นาที $(( ELAPSED % 60 )) วินาที"
 log " ✅ รัน verify ต่อด้วย  : verify-object-cache.sh"
